@@ -500,14 +500,16 @@ async def mystats(interaction: discord.Interaction):
 
     c.execute("""
     SELECT joueur_id,
+           SUM(CASE WHEN gagnant_id = joueur_id THEN montant * 2 * (1 - 0.05) ELSE 0 END) as kamas_gagnes,
+           SUM(montant) as kamas_mises,
            SUM(CASE WHEN gagnant_id = joueur_id THEN 1 ELSE 0 END) as victoires,
            SUM(CASE WHEN est_nul = 1 THEN 1 ELSE 0 END) as nuls,
            SUM(CASE WHEN gagnant_id != joueur_id AND est_nul = 0 THEN 1 ELSE 0 END) as defaites,
            COUNT(*) as total_parties
     FROM (
-        SELECT joueur1_id as joueur_id, gagnant_id, est_nul FROM parties
+        SELECT joueur1_id as joueur_id, montant, gagnant_id, est_nul FROM parties
         UNION ALL
-        SELECT joueur2_id as joueur_id, gagnant_id, est_nul FROM parties
+        SELECT joueur2_id as joueur_id, montant, gagnant_id, est_nul FROM parties
     )
     WHERE joueur_id = ?
     GROUP BY joueur_id
@@ -524,7 +526,7 @@ async def mystats(interaction: discord.Interaction):
         await interaction.response.send_message(embed=embed, ephemeral=True)
         return
 
-    _, victoires, nuls, defaites, total_parties = stats_data
+    _, kamas_gagnes, kamas_mises, victoires, nuls, defaites, total_parties = stats_data
     winrate = (victoires / total_parties * 100) if total_parties > 0 else 0.0
 
     embed = discord.Embed(
@@ -533,10 +535,18 @@ async def mystats(interaction: discord.Interaction):
         color=discord.Color.gold()
     )
 
+    embed.add_field(name="Total gagnés", value=f"**{kamas_gagnes:,.0f}**", inline=True)
+    embed.add_field(name=" ", value="─" * 3, inline=False)
+    embed.add_field(name="Totatl misés", value=f"**{kamas_mises:,.0f}**", inline=True)
+    embed.add_field(name=" ", value="─" * 20, inline=False)
     embed.add_field(name="Duels joués", value=f"**{total_parties}**", inline=False)
+    embed.add_field(name=" ", value="─" * 3, inline=False)
     embed.add_field(name="Victoires", value=f"**{victoires}**", inline=True)
+    embed.add_field(name=" ", value="─" * 3, inline=False)
     embed.add_field(name="Nuls", value=f"**{nuls}**", inline=True)
+    embed.add_field(name=" ", value="─" * 3, inline=False)
     embed.add_field(name="Défaites", value=f"**{defaites}**", inline=True)
+    embed.add_field(name=" ", value="─" * 3, inline=False)
     embed.add_field(name="Taux de victoire", value=f"**{winrate:.1f}%**", inline=False)
 
     embed.set_thumbnail(url=interaction.user.avatar.url if interaction.user.avatar else None)
