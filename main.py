@@ -307,18 +307,20 @@ class StatsView(discord.ui.View):
             return embed
 
         description = ""
-        for i, (user_id, victoires, nuls, defaites, total_parties) in enumerate(slice_entries):
+        for i, (user_id, kamas_mises, kamas_gagnes, victoires, nuls, defaites, total_parties) in enumerate(slice_entries):
             rank = self.page * self.entries_per_page + i + 1
             winrate = (victoires / total_parties * 100) if total_parties > 0 else 0.0
             description += (
-                f"**#{rank}** <@{user_id}> | "
-                f"**Victoires**: `{victoires}` | **Nuls**: `{nuls}` | **Défaites**: `{defaites}`\n"
-                f"**Winrate**: `{winrate:.1f}%` (**{victoires}**/**{total_parties}**)\n"
+                f"**#{rank}** <@{user_id}>\n"
+                f"💰 **Misés** : `{kamas_mises:,.0f}` | "
+                f"🏆 **Gagnés** : `{kamas_gagnes:,.0f}`\n"
+                f"**Victoires** : `{victoires}` | **Nuls**: `{nuls}` | **Défaites**: `{defaites}`\n"
+                f"**🎯 Winrate** : `{winrate:.1f}%` (**{victoires}**/**{total_parties}**)\n"
             )
             if i < len(slice_entries) - 1:
                 description += "─" * 20 + "\n"
 
-        embed.description = description
+        embed.description = description.replace(",", " ")
         embed.set_footer(text=f"Page {self.page + 1}/{self.max_page + 1}")
         return embed
 
@@ -468,24 +470,25 @@ async def statsall(interaction: discord.Interaction):
 
     c.execute("""
     SELECT joueur_id,
+           SUM(montant) as kamas_mises,
+           SUM(CASE WHEN gagnant_id = joueur_id THEN montant * 2 * 0.95 ELSE 0 END) as kamas_gagnes,
            SUM(CASE WHEN gagnant_id = joueur_id THEN 1 ELSE 0 END) as victoires,
            SUM(CASE WHEN est_nul = 1 THEN 1 ELSE 0 END) as nuls,
            SUM(CASE WHEN gagnant_id != joueur_id AND est_nul = 0 THEN 1 ELSE 0 END) as defaites,
            COUNT(*) as total_parties
     FROM (
-        SELECT joueur1_id as joueur_id, gagnant_id, est_nul FROM parties
+        SELECT joueur1_id as joueur_id, montant, gagnant_id, est_nul FROM parties
         UNION ALL
-        SELECT joueur2_id as joueur_id, gagnant_id, est_nul FROM parties
+        SELECT joueur2_id as joueur_id, montant, gagnant_id, est_nul FROM parties
     )
     GROUP BY joueur_id
+    ORDER BY kamas_gagnes DESC
     """)
     data = c.fetchall()
 
     stats = []
-    for user_id, victoires, nuls, defaites, total_parties in data:
-        stats.append((user_id, victoires, nuls, defaites, total_parties))
-
-    stats.sort(key=lambda x: x[1], reverse=True)
+    for user_id, kamas_mises, kamas_gagnes, victoires, nuls, defaites, total_parties in data:
+        stats.append((user_id, kamas_mises, kamas_gagnes, victoires, nuls, defaites, total_parties))
 
     if not stats:
         await interaction.response.send_message("Aucune donnée statistique disponible.", ephemeral=True)
@@ -500,8 +503,8 @@ async def mystats(interaction: discord.Interaction):
 
     c.execute("""
     SELECT joueur_id,
-           SUM(CASE WHEN gagnant_id = joueur_id THEN montant * 2 * (1 - 0.05) ELSE 0 END) as kamas_gagnes,
            SUM(montant) as kamas_mises,
+           SUM(CASE WHEN gagnant_id = joueur_id THEN montant * 2 * 0.95 ELSE 0 END) as kamas_gagnes,
            SUM(CASE WHEN gagnant_id = joueur_id THEN 1 ELSE 0 END) as victoires,
            SUM(CASE WHEN est_nul = 1 THEN 1 ELSE 0 END) as nuls,
            SUM(CASE WHEN gagnant_id != joueur_id AND est_nul = 0 THEN 1 ELSE 0 END) as defaites,
