@@ -2,13 +2,12 @@ import os
 import discord
 from discord import app_commands
 from discord.ext import commands
+from keep_alive import keep_alive
 import random
 import asyncio
 import sqlite3
 from datetime import datetime
 
-# Assurez-vous que keep_alive est bien importé si vous en avez besoin
-from keep_alive import keep_alive 
 
 token = os.environ['TOKEN_BOT_DISCORD']
 
@@ -41,15 +40,6 @@ CREATE TABLE IF NOT EXISTS parties (
     gagnant_id INTEGER,
     est_nul BOOLEAN NOT NULL,
     date TIMESTAMP NOT NULL
-)
-""")
-# AJOUT DE LA TABLE POUR LES DUELS EN ATTENTE
-c.execute("""
-CREATE TABLE IF NOT EXISTS duels_en_attente (
-    message_id INTEGER PRIMARY KEY,
-    joueur1_id INTEGER NOT NULL,
-    joueur2_id INTEGER NOT NULL,
-    montant INTEGER NOT NULL
 )
 """)
 conn.commit()
@@ -93,58 +83,25 @@ def create_board_embed(board, title, description, color, turn=None):
 
 def find_duel_by_user(user_id):
     """Recherche un duel en cours par l'ID d'un utilisateur."""
-    # Le duel est d'abord recherché en mémoire
     if user_id in duel_by_player:
         return duel_by_player[user_id]
-    
-    # Si non trouvé, on cherche dans la base de données
-    c.execute("""
-    SELECT message_id, joueur1_id, joueur2_id, montant
-    FROM duels_en_attente
-    WHERE joueur1_id = ? OR joueur2_id = ?
-    """, (user_id, user_id))
-    result = c.fetchone()
-    
-    if result:
-        message_id, joueur1_id, joueur2_id, montant = result
-        # On recrée les données du duel et on les insère dans la mémoire pour les prochaines interactions
-        # Note : Il faudra s'assurer que les objets User sont bien créés, ce qui n'est pas possible sans le bot.
-        # Pour le moment, on se contente de l'ID.
-        joueur1 = bot.get_user(joueur1_id)
-        joueur2 = bot.get_user(joueur2_id) if joueur2_id != 0 else None
-        
-        duel_data = {
-            "joueur1": joueur1,
-            "joueur2": joueur2,
-            "montant": montant,
-            "message_id_initial": message_id
-        }
-        duel_key = tuple(sorted((joueur1_id, joueur2_id)))
-        duels[duel_key] = duel_data
-        duel_by_player[joueur1_id] = (duel_key, duel_data)
-        if joueur2_id != 0:
-            duel_by_player[joueur2_id] = (duel_key, duel_data)
-            
-        return duel_key, duel_data
-    
     return None, None
+
+def is_duel_pending(duel_data):
+    """Vérifie si le duel est en attente d'un second joueur."""
+    return duel_data.get("joueur2") is None or duel_data.get("joueur2").id == 0
 
 def clean_up_duel(joueur1_id, joueur2_id):
     """S'assure de bien supprimer le duel et ses références."""
     duel_key = tuple(sorted((joueur1_id, joueur2_id)))
-    
-    # Suppression en mémoire
     if duel_key in duels:
         del duels[duel_key]
     
     if joueur1_id in duel_by_player:
         del duel_by_player[joueur1_id]
-    if joueur2_id != 0 and joueur2_id in duel_by_player: # S'assurer que joueur2_id existe
+    if joueur2_id in duel_by_player:
         del duel_by_player[joueur2_id]
-    
-    # Suppression dans la base de données
-    c.execute("DELETE FROM duels_en_attente WHERE joueur1_id = ? OR joueur2_id = ?", (joueur1_id, joueur2_id))
-    conn.commit()
+
 
 # --- Vues Discord ---
 class TicTacToeView(discord.ui.View):
@@ -194,7 +151,6 @@ class TicTacToeView(discord.ui.View):
             await self.end_game(interaction, None, is_draw=True)
             return
 
-        # Passe le tour au joueur suivant
         self.joueur_actif = self.joueur2 if self.joueur_actif.id == self.joueur1.id else self.joueur1
         self.update_buttons()
         
@@ -227,7 +183,6 @@ class TicTacToeView(discord.ui.View):
         embed = create_board_embed(self.board, title, description, color)
         await interaction.response.edit_message(embed=embed, view=None)
 
-        # Enregistrement dans la base de données
         now = datetime.utcnow()
         try:
             c.execute(
@@ -238,7 +193,6 @@ class TicTacToeView(discord.ui.View):
         except Exception as e:
             print("❌ Erreur lors de l'insertion dans la base de données:", e)
 
-        # Suppression de l'entrée du duel du dictionnaire
         clean_up_duel(self.joueur1.id, self.joueur2.id)
 
 class RejoindreView(discord.ui.View):
@@ -256,6 +210,8 @@ class RejoindreView(discord.ui.View):
             "croupier": self.croupier,
             "message_id_initial": self.message_id_initial
         }
+        
+        self.add_item(discord.ui.Button(label="🎯 Rejoindre le duel", style=discord.ButtonStyle.green, custom_id="rejoindre_duel"))
 
     @discord.ui.button(label="🎯 Rejoindre le duel", style=discord.ButtonStyle.green, custom_id="rejoindre_duel")
     async def rejoindre(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -265,7 +221,6 @@ class RejoindreView(discord.ui.View):
             await interaction.response.send_message("❌ Tu ne peux pas rejoindre ton propre duel.", ephemeral=True)
             return
         
-        # Vérification si le joueur est déjà dans un duel
         _, existing_duel = find_duel_by_user(joueur2.id)
         if existing_duel:
             await interaction.response.send_message("❌ Tu participes déjà à un autre duel.", ephemeral=True)
@@ -274,10 +229,11 @@ class RejoindreView(discord.ui.View):
         self.joueur2 = joueur2
         self.duel_data["joueur2"] = joueur2
         
-        self.children[0].disabled = True
+        self.clear_items()
         
-        self.add_item(discord.ui.Button(label="🎲 Rejoindre en tant que Croupier", style=discord.ButtonStyle.secondary, custom_id="rejoindre_croupier"))
-        self.children[-1].callback = self.rejoindre_croupier
+        rejoindre_croupier_button = discord.ui.Button(label="🎲 Rejoindre en tant que Croupier", style=discord.ButtonStyle.secondary, custom_id="rejoindre_croupier")
+        rejoindre_croupier_button.callback = self.rejoindre_croupier
+        self.add_item(rejoindre_croupier_button)
 
         embed = interaction.message.embeds[0]
         embed.title = f"⚔️ Duel entre {self.joueur1.display_name} et {self.joueur2.display_name}"
@@ -295,28 +251,24 @@ class RejoindreView(discord.ui.View):
             allowed_mentions=discord.AllowedMentions(roles=True)
         )
         
-        # Mise à jour de l'entrée dans les dictionnaires pour le joueur 2
         duel_key = tuple(sorted((self.joueur1.id, self.joueur2.id)))
         duels[duel_key] = self.duel_data
         duel_by_player[self.joueur2.id] = (duel_key, self.duel_data)
         
-        # Correction pour l'entrée du joueur 1, qui peut avoir été ajoutée avec un placeholder
         old_duel_key = tuple(sorted((self.joueur1.id, 0)))
         if old_duel_key in duels:
             del duels[old_duel_key]
         
         duel_by_player[self.joueur1.id] = (duel_key, self.duel_data)
-        
-        # MISE À JOUR DANS LA BASE DE DONNÉES
-        c.execute("""
-        UPDATE duels_en_attente SET joueur2_id = ? WHERE message_id = ?
-        """, (self.joueur2.id, self.message_id_initial))
-        conn.commit()
 
     async def rejoindre_croupier(self, interaction: discord.Interaction):
         role_croupier = discord.utils.get(interaction.guild.roles, name="croupier")
         if not role_croupier or role_croupier not in interaction.user.roles:
             await interaction.response.send_message("❌ Tu n'as pas le rôle de `croupier` pour rejoindre ce duel.", ephemeral=True)
+            return
+        
+        if self.joueur2 is None:
+            await interaction.response.send_message("❌ Un second joueur n'a pas encore rejoint ce duel.", ephemeral=True)
             return
 
         if self.croupier:
@@ -330,7 +282,7 @@ class RejoindreView(discord.ui.View):
         embed.set_field_at(2, name="Status", value=f"✅ Prêt à jouer ! Croupier : {self.croupier.mention}", inline=False)
         embed.set_footer(text="Le croupier peut lancer la partie.")
         
-        self.children[-1].disabled = True
+        self.clear_items()
         lancer_button = discord.ui.Button(label="🎮 Lancer la partie", style=discord.ButtonStyle.success, custom_id="lancer_partie", row=1)
         lancer_button.callback = self.lancer_partie
         self.add_item(lancer_button)
@@ -348,15 +300,11 @@ class RejoindreView(discord.ui.View):
 
         await interaction.response.defer()
 
-        # Supprimer le message initial et le duel en attente de la base de données
+        # Supprimer le message initial
         try:
-            c.execute("DELETE FROM duels_en_attente WHERE message_id = ?", (self.message_id_initial,))
-            conn.commit()
             await interaction.message.delete()
         except discord.NotFound:
-            print("Le message du duel en attente a déjà été supprimé.")
-        except Exception as e:
-            print(f"Erreur lors de la suppression du message ou de la base de données: {e}")
+            pass
 
         # Créer le nouveau message pour le jeu de morpion
         tictactoe_view = TicTacToeView(self.duel_data)
@@ -488,13 +436,10 @@ async def duel(interaction: discord.Interaction, montant: int):
     message = await interaction.original_response()
     view.message_id_initial = message.id
     
-    # AJOUT : ENREGISTREMENT DANS LA BASE DE DONNÉES
-    c.execute("""
-    INSERT INTO duels_en_attente (message_id, joueur1_id, joueur2_id, montant)
-    VALUES (?, ?, ?, ?)
-    """, (message.id, interaction.user.id, 0, montant)) # Utiliser 0 comme placeholder pour joueur2_id
-    conn.commit()
-
+    duel_key = tuple(sorted((interaction.user.id, 0)))
+    duels[duel_key] = view.duel_data
+    duel_by_player[interaction.user.id] = (duel_key, view.duel_data)
+    
 @bot.tree.command(name="quit", description="Annule le duel en cours que tu as lancé.")
 async def quit_duel(interaction: discord.Interaction):
     duel_key, duel_data = find_duel_by_user(interaction.user.id)
@@ -505,72 +450,57 @@ async def quit_duel(interaction: discord.Interaction):
 
     joueur1 = duel_data["joueur1"]
     montant = duel_data["montant"]
-    is_joueur2 = "joueur2" in duel_data and duel_data.get("joueur2") and duel_data["joueur2"].id == interaction.user.id
     
-    if "game_message_id" in duel_data:
-        await interaction.response.send_message("❌ La partie est déjà en cours, vous ne pouvez pas la quitter. Veuillez attendre la fin du match.", ephemeral=True)
+    is_joueur1 = interaction.user.id == joueur1.id
+    
+    if "game_message_id" in duel_data and duel_data["game_message_id"] is not None:
+        await interaction.response.send_message("❌ La partie est déjà en cours, vous ne pouvez pas la quitter.", ephemeral=True)
         return
 
+    joueur2_id = duel_data.get("joueur2", discord.Object(id=0)).id
     message_id_to_edit = duel_data.get("message_id_initial")
     
+    clean_up_duel(joueur1.id, joueur2_id)
+    
     try:
-        if not message_id_to_edit:
-            raise discord.NotFound
-
-        message_to_edit = await interaction.channel.fetch_message(message_id_to_edit)
-        
-        if not is_joueur2:
-            embed_initial = message_to_edit.embeds[0]
-            embed_initial.color = discord.Color.red()
-            embed_initial.title += " (Annulé)"
-            embed_initial.description = f"⚠️ Ce duel a été annulé par {interaction.user.mention}."
-            await message_to_edit.edit(embed=embed_initial, view=None)
-            await interaction.response.send_message("✅ Ton duel a bien été annulé.", ephemeral=True)
+        if message_id_to_edit:
+            message_to_edit = await interaction.channel.fetch_message(message_id_to_edit)
             
-            # Correction : Appeler la fonction de nettoyage ici pour le Joueur 1
-            joueur2_id = duel_data.get("joueur2", discord.Object(id=0)).id
-            clean_up_duel(joueur1.id, joueur2_id)
-            
+            if is_joueur1:
+                embed_initial = message_to_edit.embeds[0]
+                embed_initial.color = discord.Color.red()
+                embed_initial.title += " (Annulé)"
+                embed_initial.description = f"⚠️ Ce duel a été annulé par {interaction.user.mention}."
+                await message_to_edit.edit(embed=embed_initial, view=None)
+                await interaction.response.send_message("✅ Ton duel a bien été annulé.", ephemeral=True)
+            else: # C'est le joueur 2 qui quitte
+                new_embed = discord.Embed(
+                    title=f"⚔️ Nouveau Duel Morpion en attente de joueur",
+                    description=f"{joueur1.mention} a misé **{f'{montant:,}'.replace(',', ' ')}** kamas pour un duel.",
+                    color=discord.Color.orange()
+                )
+                new_embed.add_field(name="👤 Joueur 1", value=f"{joueur1.mention}", inline=True)
+                new_embed.add_field(name="👤 Joueur 2", value="🕓 En attente...", inline=True)
+                new_embed.add_field(name="Status", value="🕓 En attente d'un second joueur.", inline=False)
+                new_embed.set_footer(text="Cliquez sur le bouton pour rejoindre le duel.")
+                
+                new_view = RejoindreView(message_id=message_id_to_edit, joueur1=joueur1, montant=montant)
+                
+                new_duel_key = tuple(sorted((joueur1.id, 0)))
+                duels[new_duel_key] = new_view.duel_data
+                duel_by_player[joueur1.id] = (new_duel_key, new_view.duel_data)
+                
+                await message_to_edit.edit(content="", embed=new_embed, view=new_view)
+                await interaction.response.send_message("✅ Tu as quitté le duel. Le créateur attend maintenant un autre joueur.", ephemeral=True)
         else:
-            new_embed = discord.Embed(
-                title=f"⚔️ Nouveau Duel Morpion en attente de joueur",
-                description=f"{joueur1.mention} a misé **{f'{montant:,}'.replace(',', ' ')}** kamas pour un duel.",
-                color=discord.Color.orange()
-            )
-            new_embed.add_field(name="👤 Joueur 1", value=f"{joueur1.mention}", inline=True)
-            new_embed.add_field(name="👤 Joueur 2", value="🕓 En attente...", inline=True)
-            new_embed.add_field(name="Status", value="🕓 En attente d'un second joueur.", inline=False)
-            new_embed.set_footer(text="Cliquez sur le bouton pour rejoindre le duel.")
-            
-            new_view = RejoindreView(message_id=message_id_to_edit, joueur1=joueur1, montant=montant)
-            
-            await message_to_edit.edit(content="", embed=new_embed, view=new_view)
-            await interaction.response.send_message("✅ Tu as quitté le duel. Le créateur attend maintenant un autre joueur.", ephemeral=True)
-            
-            # Nettoyage partiel
-            old_duel_key = tuple(sorted((joueur1.id, duel_data["joueur2"].id)))
-            if old_duel_key in duels:
-                del duels[old_duel_key]
-            if duel_data["joueur2"].id in duel_by_player:
-                del duel_by_player[duel_data["joueur2"].id]
-            
-            new_duel_key = tuple(sorted((joueur1.id, 0)))
-            new_view.duel_data["joueur2"] = None
-            duels[new_duel_key] = new_view.duel_data
-            duel_by_player[joueur1.id] = (new_duel_key, new_view.duel_data)
-            
-            c.execute("UPDATE duels_en_attente SET joueur2_id = ? WHERE message_id = ?", (0, message_id_to_edit))
-            conn.commit()
-
+            await interaction.response.send_message("❌ Le message du duel n'a pas été trouvé. Le duel a été supprimé du système.", ephemeral=True)
     except discord.NotFound:
-        joueur2_id = duel_data.get("joueur2", discord.Object(id=0)).id
-        clean_up_duel(joueur1.id, joueur2_id)
         await interaction.response.send_message("❌ Le message du duel initial n'existe plus. Le duel a été supprimé du système.", ephemeral=True)
     except Exception as e:
         print(f"Erreur lors de l'annulation du duel: {e}")
         await interaction.response.send_message("❌ Une erreur s'est produite lors de l'annulation du duel.", ephemeral=True)
 
-# Commandes de statistiques (inchangées)
+
 @bot.tree.command(name="statsall", description="Affiche les stats de morpion à vie.")
 async def statsall(interaction: discord.Interaction):
     if not isinstance(interaction.channel, discord.TextChannel) or interaction.channel.name != "morpion":
@@ -579,12 +509,12 @@ async def statsall(interaction: discord.Interaction):
 
     c.execute("""
     SELECT joueur_id,
-           SUM(montant) as kamas_mises,
-           SUM(CASE WHEN gagnant_id = joueur_id THEN montant * 2 * 0.95 ELSE 0 END) as kamas_gagnes,
-           SUM(CASE WHEN gagnant_id = joueur_id THEN 1 ELSE 0 END) as victoires,
-           SUM(CASE WHEN est_nul = 1 THEN 1 ELSE 0 END) as nuls,
-           SUM(CASE WHEN gagnant_id != joueur_id AND est_nul = 0 THEN 1 ELSE 0 END) as defaites,
-           COUNT(*) as total_parties
+            SUM(montant) as kamas_mises,
+            SUM(CASE WHEN gagnant_id = joueur_id THEN montant * 2 * 0.95 ELSE 0 END) as kamas_gagnes,
+            SUM(CASE WHEN gagnant_id = joueur_id THEN 1 ELSE 0 END) as victoires,
+            SUM(CASE WHEN est_nul = 1 THEN 1 ELSE 0 END) as nuls,
+            SUM(CASE WHEN gagnant_id != joueur_id AND est_nul = 0 THEN 1 ELSE 0 END) as defaites,
+            COUNT(*) as total_parties
     FROM (
         SELECT joueur1_id as joueur_id, montant, gagnant_id, est_nul FROM parties
         UNION ALL
@@ -606,17 +536,18 @@ async def statsall(interaction: discord.Interaction):
     view = StatsView(interaction, stats)
     await interaction.response.send_message(embed=view.get_embed(), view=view, ephemeral=False)
 
+
 @bot.tree.command(name="mystats", description="Affiche tes statistiques de morpion personnelles.")
 async def mystats(interaction: discord.Interaction):
     user_id = interaction.user.id
 
     c.execute("""
     SELECT joueur_id,
-           SUM(montant) as kamas_mises,
-           SUM(CASE WHEN gagnant_id = joueur_id THEN montant * 2 * 0.95 ELSE 0 END) as kamas_gagnes,
-           SUM(CASE WHEN est_nul = 1 THEN 1 ELSE 0 END) as nuls,
-           SUM(CASE WHEN gagnant_id != joueur_id AND est_nul = 0 THEN 1 ELSE 0 END) as defaites,
-           COUNT(*) as total_parties
+            SUM(montant) as kamas_mises,
+            SUM(CASE WHEN gagnant_id = joueur_id THEN montant * 2 * 0.95 ELSE 0 END) as kamas_gagnes,
+            SUM(CASE WHEN est_nul = 1 THEN 1 ELSE 0 END) as nuls,
+            SUM(CASE WHEN gagnant_id != joueur_id AND est_nul = 0 THEN 1 ELSE 0 END) as defaites,
+            COUNT(*) as total_parties
     FROM (
         SELECT joueur1_id as joueur_id, montant, gagnant_id, est_nul FROM parties
         UNION ALL
@@ -667,7 +598,7 @@ async def mystats(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-# --- Démarrage du bot ---
+# Démarrage du bot
 @bot.event
 async def on_ready():
     print(f"{bot.user} est prêt !")
@@ -675,7 +606,7 @@ async def on_ready():
         await bot.tree.sync()
         print("✅ Commandes synchronisées.")
     except Exception as e:
-        print(f"Erreur : {e}")
+        print(f"Erreur lors de la synchronisation des commandes : {e}")
 
 keep_alive()
 bot.run(token)
