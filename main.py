@@ -4,14 +4,18 @@ from discord import app_commands
 from discord.ext import commands
 import random
 import asyncio
-from keep_alive import keep_alive
 import sqlite3
 from datetime import datetime
+from keep_alive import keep_alive # Assume this is handled by your environment
 
 token = os.environ['TOKEN_BOT_DISCORD']
 
-# Dictionnaire pour stocker les duels en cours
+# Dictionnaire pour stocker les duels en cours.
+# La clé sera un tuple de (joueur1_id, joueur2_id) pour une identification unique.
 duels = {}
+
+# Dictionnaire de mappage pour retrouver un duel rapidement par l'ID d'un joueur
+duel_by_player = {}
 
 # Emojis pour la grille de morpion
 EMOJIS_MORPION = {
@@ -23,7 +27,7 @@ EMOJIS_MORPION = {
 # Commission du croupier
 COMMISSION = 0.05
 
-# Connexion à la base de données (pour garder des stats)
+# Connexion à la base de données
 conn = sqlite3.connect("tictactoe_stats.db")
 c = conn.cursor()
 c.execute("""
@@ -76,18 +80,23 @@ def create_board_embed(board, title, description, color, turn=None):
         embed.add_field(name="Tour de", value=f"{turn.mention}", inline=False)
     return embed
 
-# Fonction utilitaire pour trouver un duel par un ID d'utilisateur
 def find_duel_by_user(user_id):
-    for message_id, duel_data in duels.items():
-        if duel_data["joueur1"].id == user_id or (
-                "joueur2" in duel_data and duel_data.get("joueur2") and duel_data["joueur2"].id == user_id
-        ):
-            return message_id, duel_data
+    """Recherche un duel en cours par l'ID d'un utilisateur."""
+    if user_id in duel_by_player:
+        return duel_by_player[user_id]
     return None, None
 
-def clean_up_duel(message_id):
-    """S'assure de bien supprimer le duel du dictionnaire."""
-    duels.pop(message_id, None)
+def clean_up_duel(joueur1_id, joueur2_id):
+    """S'assure de bien supprimer le duel et ses références."""
+    duel_key = tuple(sorted((joueur1_id, joueur2_id)))
+    if duel_key in duels:
+        del duels[duel_key]
+    
+    if joueur1_id in duel_by_player:
+        del duel_by_player[joueur1_id]
+    if joueur2_id in duel_by_player:
+        del duel_by_player[joueur2_id]
+
 
 # --- Vues Discord ---
 class TicTacToeView(discord.ui.View):
@@ -97,7 +106,6 @@ class TicTacToeView(discord.ui.View):
         self.board = [" " for _ in range(9)]
         self.joueur1 = duel_data["joueur1"]
         self.joueur2 = duel_data["joueur2"]
-        self.game_message_id = duel_data.get("game_message_id")
         
         self.joueur_actif = random.choice([self.joueur1, self.joueur2])
         self.symboles = {
@@ -183,8 +191,7 @@ class TicTacToeView(discord.ui.View):
             print("❌ Erreur lors de l'insertion dans la base de données:", e)
 
         # Suppression de l'entrée du duel du dictionnaire
-        clean_up_duel(self.game_message_id)
-
+        clean_up_duel(self.joueur1.id, self.joueur2.id)
 
 class RejoindreView(discord.ui.View):
     def __init__(self, message_id, joueur1, montant):
@@ -239,6 +246,10 @@ class RejoindreView(discord.ui.View):
             view=self,
             allowed_mentions=discord.AllowedMentions(roles=True)
         )
+        # Mettre à jour l'entrée du joueur 2 dans le dictionnaire
+        duel_key = tuple(sorted((self.joueur1.id, self.joueur2.id)))
+        duels[duel_key] = self.duel_data
+        duel_by_player[self.joueur2.id] = (duel_key, self.duel_data)
 
     async def rejoindre_croupier(self, interaction: discord.Interaction):
         role_croupier = discord.utils.get(interaction.guild.roles, name="croupier")
@@ -291,14 +302,7 @@ class RejoindreView(discord.ui.View):
             turn=tictactoe_view.joueur_actif
         )
 
-        game_message = await interaction.channel.send(embed=embed, view=tictactoe_view)
-        
-        # Mettre à jour l'identifiant du message dans les données du duel et dans le dictionnaire principal
-        self.duel_data["game_message_id"] = game_message.id
-        duels[game_message.id] = self.duel_data
-        
-        # S'assurer que le message initial est bien retiré du dictionnaire s'il existe encore
-        clean_up_duel(self.message_id_initial)
+        await interaction.channel.send(embed=embed, view=tictactoe_view)
 
 
 class StatsView(discord.ui.View):
@@ -417,13 +421,20 @@ async def duel(interaction: discord.Interaction, montant: int):
     
     message = await interaction.original_response()
     view.message_id_initial = message.id
-    duels[message.id] = view.duel_data
     
+    # Mettre le duel dans le dictionnaire avec le joueur 1 en attendant le joueur 2
+    duel_key = tuple(sorted((interaction.user.id, 0))) # Utiliser 0 comme placeholder pour joueur2_id
+    duels[duel_key] = view.duel_data
+    duel_by_player[interaction.user.id] = (duel_key, view.duel_data)
+
+    # Assurez-vous d'avoir une entrée pour le message initial
+    duel_by_player[message.id] = (duel_key, view.duel_data)
+
 @bot.tree.command(name="quit", description="Annule le duel en cours que tu as lancé.")
 async def quit_duel(interaction: discord.Interaction):
-    message_id_to_find, duel_data = find_duel_by_user(interaction.user.id)
+    duel_key, duel_data = find_duel_by_user(interaction.user.id)
     
-    if message_id_to_find is None:
+    if duel_key is None:
         await interaction.response.send_message("❌ Tu n'as aucun duel actif à annuler.", ephemeral=True)
         return
 
@@ -431,41 +442,44 @@ async def quit_duel(interaction: discord.Interaction):
     montant = duel_data["montant"]
     is_joueur2 = "joueur2" in duel_data and duel_data.get("joueur2") and duel_data["joueur2"].id == interaction.user.id
 
-    # Supprimer le duel du dictionnaire
-    clean_up_duel(message_id_to_find)
+    message_id_to_edit = duel_data.get("message_id_initial")
+    
+    # Supprimer le duel des deux dictionnaires
+    clean_up_duel(joueur1.id, duel_data.get("joueur2", discord.Object(id=0)).id)
     
     try:
-        message_to_edit = await interaction.channel.fetch_message(message_id_to_find)
-        
-        if not is_joueur2:
-            # L'annulateur est le créateur du duel
-            embed_initial = message_to_edit.embeds[0]
-            embed_initial.color = discord.Color.red()
-            embed_initial.title += " (Annulé)"
-            embed_initial.description = f"⚠️ Ce duel a été annulé par {interaction.user.mention}."
-            await message_to_edit.edit(embed=embed_initial, view=None)
-            await interaction.response.send_message("✅ Ton duel a bien été annulé.", ephemeral=True)
-        else:
-            # L'annulateur est le joueur 2 (cas où le duel n'était pas encore commencé)
-            new_embed = discord.Embed(
-                title=f"⚔️ Nouveau Duel Morpion en attente de joueur",
-                description=f"{joueur1.mention} a misé **{f'{montant:,}'.replace(',', ' ')}** kamas pour un duel.",
-                color=discord.Color.orange()
-            )
-            new_embed.add_field(name="👤 Joueur 1", value=f"{joueur1.mention}", inline=True)
-            new_embed.add_field(name="👤 Joueur 2", value="🕓 En attente...", inline=True)
-            new_embed.add_field(name="Status", value="🕓 En attente d'un second joueur.", inline=False)
-            new_embed.set_footer(text="Cliquez sur le bouton pour rejoindre le duel.")
+        if message_id_to_edit:
+            message_to_edit = await interaction.channel.fetch_message(message_id_to_edit)
             
-            new_view = RejoindreView(message_id=message_id_to_find, joueur1=joueur1, montant=montant)
-            
-            duels[message_id_to_find] = new_view.duel_data
-            
-            role_membre = discord.utils.get(interaction.guild.roles, name="membre")
-            contenu_ping = f"{role_membre.mention} — Un nouveau duel est prêt ! Un joueur est attendu."
-            
-            await message_to_edit.edit(content=contenu_ping, embed=new_embed, view=new_view, allowed_mentions=discord.AllowedMentions(roles=True))
-            await interaction.response.send_message("✅ Tu as quitté le duel. Le créateur attend maintenant un autre joueur.", ephemeral=True)
+            if not is_joueur2:
+                # L'annulateur est le créateur du duel
+                embed_initial = message_to_edit.embeds[0]
+                embed_initial.color = discord.Color.red()
+                embed_initial.title += " (Annulé)"
+                embed_initial.description = f"⚠️ Ce duel a été annulé par {interaction.user.mention}."
+                await message_to_edit.edit(embed=embed_initial, view=None)
+                await interaction.response.send_message("✅ Ton duel a bien été annulé.", ephemeral=True)
+            else:
+                # L'annulateur est le joueur 2
+                new_embed = discord.Embed(
+                    title=f"⚔️ Nouveau Duel Morpion en attente de joueur",
+                    description=f"{joueur1.mention} a misé **{f'{montant:,}'.replace(',', ' ')}** kamas pour un duel.",
+                    color=discord.Color.orange()
+                )
+                new_embed.add_field(name="👤 Joueur 1", value=f"{joueur1.mention}", inline=True)
+                new_embed.add_field(name="👤 Joueur 2", value="🕓 En attente...", inline=True)
+                new_embed.add_field(name="Status", value="🕓 En attente d'un second joueur.", inline=False)
+                new_embed.set_footer(text="Cliquez sur le bouton pour rejoindre le duel.")
+                
+                new_view = RejoindreView(message_id=message_id_to_edit, joueur1=joueur1, montant=montant)
+                
+                # Créer une nouvelle entrée pour le duel
+                new_duel_key = tuple(sorted((joueur1.id, 0)))
+                duels[new_duel_key] = new_view.duel_data
+                duel_by_player[joueur1.id] = (new_duel_key, new_view.duel_data)
+                
+                await message_to_edit.edit(content="", embed=new_embed, view=new_view)
+                await interaction.response.send_message("✅ Tu as quitté le duel. Le créateur attend maintenant un autre joueur.", ephemeral=True)
     except Exception as e:
         print(f"Erreur lors de l'annulation du duel: {e}")
         await interaction.response.send_message("❌ Une erreur s'est produite lors de l'annulation du duel.", ephemeral=True)
@@ -548,7 +562,7 @@ async def mystats(interaction: discord.Interaction):
 
     embed.add_field(name="Total gagnés", value=f"**{kamas_gagnes:,.0f}**", inline=True)
     embed.add_field(name=" ", value="─" * 3, inline=False)
-    embed.add_field(name="Totatl misés", value=f"**{kamas_mises:,.0f}**", inline=True)
+    embed.add_field(name="Total misés", value=f"**{kamas_mises:,.0f}**", inline=True)
     embed.add_field(name=" ", value="─" * 20, inline=False)
     embed.add_field(name="Duels joués", value=f"**{total_parties}**", inline=False)
     embed.add_field(name=" ", value="─" * 3, inline=False)
