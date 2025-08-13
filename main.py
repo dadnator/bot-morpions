@@ -79,7 +79,7 @@ def create_board_embed(board, title, description, color, turn=None):
 # --- Vues Discord ---
 class TicTacToeView(discord.ui.View):
     def __init__(self, duel_data):
-        super().__init__(timeout=300)
+        super().__init__(timeout=None)
         self.duel_data = duel_data
         self.board = [" " for _ in range(9)]
         self.joueur1 = duel_data["joueur1"]
@@ -173,7 +173,7 @@ class TicTacToeView(discord.ui.View):
 
 class RejoindreView(discord.ui.View):
     def __init__(self, message_id, joueur1, montant):
-        super().__init__(timeout=300)
+        super().__init__(timeout=None)
         self.message_id_initial = message_id
         self.joueur1 = joueur1
         self.montant = montant
@@ -281,7 +281,7 @@ class RejoindreView(discord.ui.View):
 
 class StatsView(discord.ui.View):
     def __init__(self, ctx, entries, page=0):
-        super().__init__(timeout=120)
+        super().__init__(timeout=None)
         self.ctx = ctx
         self.entries = entries
         self.page = page
