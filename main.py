@@ -383,7 +383,7 @@ async def duel(interaction: discord.Interaction, montant: int):
             
     embed = discord.Embed(
         title="⚔️ Nouveau Duel Morpion en attente de joueur",
-        description=f"{interaction.user.mention} a misé **{montant:,}** kamas pour un duel.",
+        description=f"{interaction.user.mention} a misé **{f'{montant:,}'.replace(',', ' ')}** kamas pour un duel.",
         color=discord.Color.orange()
     )
     embed.add_field(name="👤 Joueur 1", value=f"{interaction.user.mention}", inline=True)
