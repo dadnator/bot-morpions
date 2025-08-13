@@ -2,25 +2,38 @@ import os
 import discord
 from discord import app_commands
 from discord.ext import commands
-from keep_alive import keep_alive
 import random
 import asyncio
 import sqlite3
 from datetime import datetime
 
+# Assume this is handled by your environment
+try:
+    from keep_alive import keep_alive
+except ImportError:
+    def keep_alive():
+        pass 
+
 token = os.environ['TOKEN_BOT_DISCORD']
 
+# Dictionnaire pour stocker les duels en cours.
+# La clé sera un tuple de (joueur1_id, joueur2_id) pour une identification unique.
 duels = {}
+
+# Dictionnaire de mappage pour retrouver un duel rapidement par l'ID d'un joueur
 duel_by_player = {}
 
+# Emojis pour la grille de morpion
 EMOJIS_MORPION = {
     "X": "❌",
     "O": "⭕",
     " ": "◻️"
 }
 
+# Commission du croupier
 COMMISSION = 0.05
 
+# Connexion à la base de données
 conn = sqlite3.connect("tictactoe_stats.db")
 c = conn.cursor()
 c.execute("""
@@ -39,6 +52,7 @@ conn.commit()
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="/", intents=intents)
 
+# --- Logique du jeu de morpion ---
 def check_win(board, player):
     win_conditions = [
         (0, 1, 2), (3, 4, 5), (6, 7, 8),
@@ -73,11 +87,17 @@ def create_board_embed(board, title, description, color, turn=None):
     return embed
 
 def find_duel_by_user(user_id):
+    """Recherche un duel en cours par l'ID d'un utilisateur."""
     if user_id in duel_by_player:
         return duel_by_player[user_id]
     return None, None
 
+def is_duel_pending(duel_data):
+    """Vérifie si le duel est en attente d'un second joueur."""
+    return duel_data.get("joueur2") is None or duel_data.get("joueur2").id == 0
+
 def clean_up_duel(joueur1_id, joueur2_id):
+    """S'assure de bien supprimer le duel et ses références."""
     duel_key = tuple(sorted((joueur1_id, joueur2_id)))
     if duel_key in duels:
         del duels[duel_key]
@@ -88,6 +108,7 @@ def clean_up_duel(joueur1_id, joueur2_id):
         del duel_by_player[joueur2_id]
 
 
+# --- Vues Discord ---
 class TicTacToeView(discord.ui.View):
     def __init__(self, duel_data):
         super().__init__(timeout=None)
@@ -135,6 +156,7 @@ class TicTacToeView(discord.ui.View):
             await self.end_game(interaction, None, is_draw=True)
             return
 
+        # Passe le tour au joueur suivant
         self.joueur_actif = self.joueur2 if self.joueur_actif.id == self.joueur1.id else self.joueur1
         self.update_buttons()
         
@@ -167,6 +189,7 @@ class TicTacToeView(discord.ui.View):
         embed = create_board_embed(self.board, title, description, color)
         await interaction.response.edit_message(embed=embed, view=None)
 
+        # Enregistrement dans la base de données
         now = datetime.utcnow()
         try:
             c.execute(
@@ -177,6 +200,7 @@ class TicTacToeView(discord.ui.View):
         except Exception as e:
             print("❌ Erreur lors de l'insertion dans la base de données:", e)
 
+        # Suppression de l'entrée du duel du dictionnaire
         clean_up_duel(self.joueur1.id, self.joueur2.id)
 
 class RejoindreView(discord.ui.View):
@@ -195,6 +219,8 @@ class RejoindreView(discord.ui.View):
             "message_id_initial": self.message_id_initial
         }
         
+        self.add_item(discord.ui.Button(label="🎯 Rejoindre le duel", style=discord.ButtonStyle.green, custom_id="rejoindre_duel"))
+
     @discord.ui.button(label="🎯 Rejoindre le duel", style=discord.ButtonStyle.green, custom_id="rejoindre_duel")
     async def rejoindre(self, interaction: discord.Interaction, button: discord.ui.Button):
         joueur2 = interaction.user
@@ -233,10 +259,12 @@ class RejoindreView(discord.ui.View):
             allowed_mentions=discord.AllowedMentions(roles=True)
         )
         
+        # Mise à jour de l'entrée dans les dictionnaires
         duel_key = tuple(sorted((self.joueur1.id, self.joueur2.id)))
         duels[duel_key] = self.duel_data
         duel_by_player[self.joueur2.id] = (duel_key, self.duel_data)
         
+        # Correction pour l'entrée du joueur 1, qui peut avoir été ajoutée avec un placeholder
         old_duel_key = tuple(sorted((self.joueur1.id, 0)))
         if old_duel_key in duels:
             del duels[old_duel_key]
@@ -247,6 +275,10 @@ class RejoindreView(discord.ui.View):
         role_croupier = discord.utils.get(interaction.guild.roles, name="croupier")
         if not role_croupier or role_croupier not in interaction.user.roles:
             await interaction.response.send_message("❌ Tu n'as pas le rôle de `croupier` pour rejoindre ce duel.", ephemeral=True)
+            return
+        
+        if self.joueur2 is None:
+            await interaction.response.send_message("❌ Un second joueur n'a pas encore rejoint ce duel.", ephemeral=True)
             return
 
         if self.croupier:
@@ -278,11 +310,13 @@ class RejoindreView(discord.ui.View):
 
         await interaction.response.defer()
 
+        # Supprimer le message initial
         try:
             await interaction.message.delete()
         except discord.NotFound:
             pass
 
+        # Créer le nouveau message pour le jeu de morpion
         tictactoe_view = TicTacToeView(self.duel_data)
         embed = create_board_embed(
             tictactoe_view.board,
@@ -427,33 +461,31 @@ async def quit_duel(interaction: discord.Interaction):
     joueur1 = duel_data["joueur1"]
     montant = duel_data["montant"]
     
-    # Vérifier si c'est le joueur 1 ou 2 qui quitte
     is_joueur1 = interaction.user.id == joueur1.id
-    is_joueur2 = "joueur2" in duel_data and duel_data.get("joueur2") and duel_data["joueur2"].id == interaction.user.id
     
-    message_id_to_edit = duel_data.get("message_id_initial")
-    
-    if "game_message_id" in duel_data:
+    if not is_duel_pending(duel_data):
         await interaction.response.send_message("❌ La partie est déjà en cours, vous ne pouvez pas la quitter.", ephemeral=True)
         return
 
     joueur2_id = duel_data.get("joueur2", discord.Object(id=0)).id
+    message_id_to_edit = duel_data.get("message_id_initial")
+    
     clean_up_duel(joueur1.id, joueur2_id)
-
+    
     try:
         if message_id_to_edit:
             message_to_edit = await interaction.channel.fetch_message(message_id_to_edit)
             
             if is_joueur1:
-                # C'est le créateur du duel qui annule
+                # C'est le créateur du duel qui annule.
                 embed_initial = message_to_edit.embeds[0]
                 embed_initial.color = discord.Color.red()
                 embed_initial.title += " (Annulé)"
                 embed_initial.description = f"⚠️ Ce duel a été annulé par {interaction.user.mention}."
                 await message_to_edit.edit(embed=embed_initial, view=None)
                 await interaction.response.send_message("✅ Ton duel a bien été annulé.", ephemeral=True)
-            elif is_joueur2:
-                # C'est le joueur 2 qui quitte
+            else:
+                # C'est le joueur 2 qui quitte. On réinitialise l'embed pour permettre à un nouveau joueur de rejoindre.
                 new_embed = discord.Embed(
                     title=f"⚔️ Nouveau Duel Morpion en attente de joueur",
                     description=f"{joueur1.mention} a misé **{f'{montant:,}'.replace(',', ' ')}** kamas pour un duel.",
@@ -472,8 +504,6 @@ async def quit_duel(interaction: discord.Interaction):
                 
                 await message_to_edit.edit(content="", embed=new_embed, view=new_view)
                 await interaction.response.send_message("✅ Tu as quitté le duel. Le créateur attend maintenant un autre joueur.", ephemeral=True)
-            else:
-                await interaction.response.send_message("❌ Tu n'es pas dans ce duel.", ephemeral=True)
 
         else:
             await interaction.response.send_message("❌ Le message du duel n'a pas été trouvé. Le duel a été supprimé du système.", ephemeral=True)
@@ -579,6 +609,7 @@ async def mystats(interaction: discord.Interaction):
     embed.set_footer(text="Bonne chance pour tes prochains duels !")
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
 
 # Démarrage du bot
 @bot.event
