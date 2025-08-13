@@ -246,10 +246,18 @@ class RejoindreView(discord.ui.View):
             view=self,
             allowed_mentions=discord.AllowedMentions(roles=True)
         )
-        # Mettre à jour l'entrée du joueur 2 dans le dictionnaire
+        
+        # Mise à jour de l'entrée dans les dictionnaires pour le joueur 2
         duel_key = tuple(sorted((self.joueur1.id, self.joueur2.id)))
         duels[duel_key] = self.duel_data
         duel_by_player[self.joueur2.id] = (duel_key, self.duel_data)
+        
+        # Correction pour l'entrée du joueur 1, qui peut avoir été ajoutée avec un placeholder
+        old_duel_key = tuple(sorted((self.joueur1.id, 0)))
+        if old_duel_key in duels:
+            del duels[old_duel_key]
+        
+        duel_by_player[self.joueur1.id] = (duel_key, self.duel_data)
 
     async def rejoindre_croupier(self, interaction: discord.Interaction):
         role_croupier = discord.utils.get(interaction.guild.roles, name="croupier")
@@ -426,9 +434,7 @@ async def duel(interaction: discord.Interaction, montant: int):
     duel_key = tuple(sorted((interaction.user.id, 0))) # Utiliser 0 comme placeholder pour joueur2_id
     duels[duel_key] = view.duel_data
     duel_by_player[interaction.user.id] = (duel_key, view.duel_data)
-
-    # Assurez-vous d'avoir une entrée pour le message initial
-    duel_by_player[message.id] = (duel_key, view.duel_data)
+    
 
 @bot.tree.command(name="quit", description="Annule le duel en cours que tu as lancé.")
 async def quit_duel(interaction: discord.Interaction):
@@ -441,11 +447,20 @@ async def quit_duel(interaction: discord.Interaction):
     joueur1 = duel_data["joueur1"]
     montant = duel_data["montant"]
     is_joueur2 = "joueur2" in duel_data and duel_data.get("joueur2") and duel_data["joueur2"].id == interaction.user.id
+    
+    # Cas 1 : Le duel est en cours
+    if "joueur2" in duel_data and duel_data["joueur2"] is not None:
+        if duel_data.get("game_message_id"):
+            # Si un message de jeu existe, le duel est en cours. On ne peut pas le quitter via cette commande.
+            await interaction.response.send_message("❌ La partie est déjà en cours, vous ne pouvez pas la quitter. Veuillez attendre la fin du match.", ephemeral=True)
+            return
 
+    # Cas 2 : Le duel est en attente
     message_id_to_edit = duel_data.get("message_id_initial")
     
-    # Supprimer le duel des deux dictionnaires
-    clean_up_duel(joueur1.id, duel_data.get("joueur2", discord.Object(id=0)).id)
+    # Suppression du duel des deux dictionnaires
+    joueur2_id = duel_data.get("joueur2", discord.Object(id=0)).id
+    clean_up_duel(joueur1.id, joueur2_id)
     
     try:
         if message_id_to_edit:
@@ -480,10 +495,15 @@ async def quit_duel(interaction: discord.Interaction):
                 
                 await message_to_edit.edit(content="", embed=new_embed, view=new_view)
                 await interaction.response.send_message("✅ Tu as quitté le duel. Le créateur attend maintenant un autre joueur.", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ Le message du duel n'a pas été trouvé. Le duel a été supprimé du système.", ephemeral=True)
+    except discord.NotFound:
+        await interaction.response.send_message("❌ Le message du duel initial n'existe plus. Le duel a été supprimé du système.", ephemeral=True)
     except Exception as e:
         print(f"Erreur lors de l'annulation du duel: {e}")
         await interaction.response.send_message("❌ Une erreur s'est produite lors de l'annulation du duel.", ephemeral=True)
 
+# Commandes de statistiques (inchangées)
 @bot.tree.command(name="statsall", description="Affiche les stats de morpion à vie.")
 async def statsall(interaction: discord.Interaction):
     if not isinstance(interaction.channel, discord.TextChannel) or interaction.channel.name != "morpion":
