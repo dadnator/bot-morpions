@@ -526,7 +526,7 @@ async def quit_duel(interaction: discord.Interaction):
             await message_to_edit.edit(embed=embed_initial, view=None)
             await interaction.response.send_message("✅ Ton duel a bien été annulé.", ephemeral=True)
             
-            # Correction: Appeler la fonction de nettoyage ici pour le joueur 1
+            # Correction : Appeler la fonction de nettoyage ici pour le Joueur 1
             joueur2_id = duel_data.get("joueur2", discord.Object(id=0)).id
             clean_up_duel(joueur1.id, joueur2_id)
             
@@ -568,16 +568,6 @@ async def quit_duel(interaction: discord.Interaction):
     except Exception as e:
         print(f"Erreur lors de l'annulation du duel: {e}")
         await interaction.response.send_message("❌ Une erreur s'est produite lors de l'annulation du duel.", ephemeral=True)
-        
-    except discord.NotFound:
-        # La suppression du duel dans la mémoire et la BD se fait dans tous les cas
-        joueur2_id = duel_data.get("joueur2", discord.Object(id=0)).id
-        clean_up_duel(joueur1.id, joueur2_id)
-        await interaction.response.send_message("❌ Le message du duel initial n'existe plus. Le duel a été supprimé du système.", ephemeral=True)
-    except Exception as e:
-        print(f"Erreur lors de l'annulation du duel: {e}")
-        await interaction.response.send_message("❌ Une erreur s'est produite lors de l'annulation du duel.", ephemeral=True)
-
 
 # Commandes de statistiques (inchangées)
 @bot.tree.command(name="statsall", description="Affiche les stats de morpion à vie.")
