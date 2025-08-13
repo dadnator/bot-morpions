@@ -168,8 +168,8 @@ class TicTacToeView(discord.ui.View):
         except Exception as e:
             print("❌ Erreur lors de l'insertion dans la base de données:", e)
 
-        # Suppression du duel de la liste en cours
-        duels.pop(interaction.message.id, None)
+        # Ajout d'un appel à la fonction de nettoyage
+        clean_up_duel(interaction.message.id)
 
 class RejoindreView(discord.ui.View):
     def __init__(self, message_id, joueur1, montant):
@@ -197,7 +197,7 @@ class RejoindreView(discord.ui.View):
         
         # Vérification si le joueur est déjà dans un duel
         for data in duels.values():
-            if data["joueur1"].id == joueur2.id or (data["joueur2"] and data["joueur2"].id == joueur2.id):
+            if data["joueur1"].id == joueur2.id or (data.get("joueur2") and data["joueur2"].id == joueur2.id):
                 await interaction.response.send_message("❌ Tu participes déjà à un autre duel.", ephemeral=True)
                 return
 
@@ -355,6 +355,10 @@ class StatsView(discord.ui.View):
         self.stop()
         await interaction.response.edit_message(content="Fermeture des statistiques.", embed=None, view=None)
 
+def clean_up_duel(message_id):
+    """S'assure de bien supprimer le duel du dictionnaire."""
+    duels.pop(message_id, None)
+
 # --- Commandes du bot ---
 @bot.tree.command(name="duel", description="Lancer un duel de morpion avec un montant.")
 @app_commands.describe(montant="Montant misé en kamas")
@@ -369,7 +373,7 @@ async def duel(interaction: discord.Interaction, montant: int):
 
     for duel_data in duels.values():
         if duel_data["joueur1"].id == interaction.user.id or (
-            "joueur2" in duel_data and duel_data["joueur2"] and duel_data["joueur2"].id == interaction.user.id
+            "joueur2" in duel_data and duel_data.get("joueur2") and duel_data["joueur2"].id == interaction.user.id
         ):
             await interaction.response.send_message(
                 "❌ Tu participes déjà à un autre duel. Termine-le ou utilise `/quit` pour l'annuler.",
@@ -402,7 +406,7 @@ async def duel(interaction: discord.Interaction, montant: int):
 async def quit_duel(interaction: discord.Interaction):
     duel_a_annuler_id = None
     is_joueur2 = False
-
+    
     for message_id, duel_data in duels.items():
         if duel_data["joueur1"].id == interaction.user.id:
             duel_a_annuler_id = message_id
@@ -410,34 +414,31 @@ async def quit_duel(interaction: discord.Interaction):
     
     if not duel_a_annuler_id:
         for message_id, duel_data in duels.items():
-            if "joueur2" in duel_data and duel_data["joueur2"] and duel_data["joueur2"].id == interaction.user.id:
+            if "joueur2" in duel_data and duel_data.get("joueur2") and duel_data["joueur2"].id == interaction.user.id:
                 duel_a_annuler_id = message_id
                 is_joueur2 = True
                 break
-
+    
     if duel_a_annuler_id is None:
-        await interaction.response.send_message("❌ Tu n'as aucun duel en attente à annuler.", ephemeral=True)
+        await interaction.response.send_message("❌ Tu n'as aucun duel actif à annuler.", ephemeral=True)
         return
 
-    if not is_joueur2:
-        duel_data = duels.pop(duel_a_annuler_id)
-        try:
-            message_initial = await interaction.channel.fetch_message(duel_a_annuler_id)
+    # Nouvelle logique pour la commande /quit
+    duel_data = duels.pop(duel_a_annuler_id)
+    try:
+        message_initial = await interaction.channel.fetch_message(duel_a_annuler_id)
+        if not is_joueur2:
+            # L'annulateur est le créateur du duel
             embed_initial = message_initial.embeds[0]
             embed_initial.color = discord.Color.red()
             embed_initial.title += " (Annulé)"
-            embed_initial.description = "⚠️ Ce duel a été annulé par son créateur."
+            embed_initial.description = f"⚠️ Ce duel a été annulé par {interaction.user.mention}."
             await message_initial.edit(embed=embed_initial, view=None)
-        except Exception:
-            pass
-        await interaction.response.send_message("✅ Ton duel a bien été annulé.", ephemeral=True)
-    else:
-        duel_data = duels.pop(duel_a_annuler_id)
-        try:
-            message_initial = await interaction.channel.fetch_message(duel_a_annuler_id)
+            await interaction.response.send_message("✅ Ton duel a bien été annulé.", ephemeral=True)
+        else:
+            # L'annulateur est le joueur 2
             joueur1 = duel_data["joueur1"]
             montant = duel_data["montant"]
-            
             new_embed = discord.Embed(
                 title=f"⚔️ Nouveau Duel Morpion en attente de joueur",
                 description=f"{joueur1.mention} a misé **{montant:,}** kamas pour un duel.",
@@ -451,15 +452,15 @@ async def quit_duel(interaction: discord.Interaction):
             new_view = RejoindreView(message_id=message_initial.id, joueur1=joueur1, montant=montant)
             
             duels[message_initial.id] = new_view.duel_data
-
+            
             role_membre = discord.utils.get(interaction.guild.roles, name="membre")
             contenu_ping = f"{role_membre.mention} — Un nouveau duel est prêt ! Un joueur est attendu."
             
             await message_initial.edit(content=contenu_ping, embed=new_embed, view=new_view, allowed_mentions=discord.AllowedMentions(roles=True))
             await interaction.response.send_message("✅ Tu as quitté le duel. Le créateur attend maintenant un autre joueur.", ephemeral=True)
-        except Exception as e:
-            print(f"Erreur lors de l'annulation du duel par joueur2: {e}")
-            await interaction.response.send_message("❌ Une erreur s'est produite lors de l'annulation du duel.", ephemeral=True)
+    except Exception as e:
+        print(f"Erreur lors de l'annulation du duel: {e}")
+        await interaction.response.send_message("❌ Une erreur s'est produite lors de l'annulation du duel.", ephemeral=True)
 
 
 @bot.tree.command(name="statsall", description="Affiche les stats de morpion à vie.")
