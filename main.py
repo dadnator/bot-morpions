@@ -506,9 +506,7 @@ async def quit_duel(interaction: discord.Interaction):
     montant = duel_data["montant"]
     is_joueur2 = "joueur2" in duel_data and duel_data.get("joueur2") and duel_data["joueur2"].id == interaction.user.id
     
-    # Cas 1 : Le duel est en cours
     if "game_message_id" in duel_data:
-        # Si un message de jeu existe, le duel est en cours. On ne peut pas le quitter via cette commande.
         await interaction.response.send_message("❌ La partie est déjà en cours, vous ne pouvez pas la quitter. Veuillez attendre la fin du match.", ephemeral=True)
         return
 
@@ -516,20 +514,23 @@ async def quit_duel(interaction: discord.Interaction):
     
     try:
         if not message_id_to_edit:
-            raise discord.NotFound # Simuler l'erreur si l'ID est manquant
+            raise discord.NotFound
 
         message_to_edit = await interaction.channel.fetch_message(message_id_to_edit)
         
         if not is_joueur2:
-            # L'annulateur est le créateur du duel
             embed_initial = message_to_edit.embeds[0]
             embed_initial.color = discord.Color.red()
             embed_initial.title += " (Annulé)"
             embed_initial.description = f"⚠️ Ce duel a été annulé par {interaction.user.mention}."
             await message_to_edit.edit(embed=embed_initial, view=None)
             await interaction.response.send_message("✅ Ton duel a bien été annulé.", ephemeral=True)
+            
+            # Correction: Appeler la fonction de nettoyage ici pour le joueur 1
+            joueur2_id = duel_data.get("joueur2", discord.Object(id=0)).id
+            clean_up_duel(joueur1.id, joueur2_id)
+            
         else:
-            # L'annulateur est le joueur 2
             new_embed = discord.Embed(
                 title=f"⚔️ Nouveau Duel Morpion en attente de joueur",
                 description=f"{joueur1.mention} a misé **{f'{montant:,}'.replace(',', ' ')}** kamas pour un duel.",
@@ -545,13 +546,28 @@ async def quit_duel(interaction: discord.Interaction):
             await message_to_edit.edit(content="", embed=new_embed, view=new_view)
             await interaction.response.send_message("✅ Tu as quitté le duel. Le créateur attend maintenant un autre joueur.", ephemeral=True)
             
-            # MISE À JOUR DE LA BASE DE DONNÉES
+            # Nettoyage partiel
+            old_duel_key = tuple(sorted((joueur1.id, duel_data["joueur2"].id)))
+            if old_duel_key in duels:
+                del duels[old_duel_key]
+            if duel_data["joueur2"].id in duel_by_player:
+                del duel_by_player[duel_data["joueur2"].id]
+            
+            new_duel_key = tuple(sorted((joueur1.id, 0)))
+            new_view.duel_data["joueur2"] = None
+            duels[new_duel_key] = new_view.duel_data
+            duel_by_player[joueur1.id] = (new_duel_key, new_view.duel_data)
+            
             c.execute("UPDATE duels_en_attente SET joueur2_id = ? WHERE message_id = ?", (0, message_id_to_edit))
             conn.commit()
 
-        # SUPPRESSION DU DUEL DE LA MÉMOIRE (La suppression dans la BD est déjà gérée)
+    except discord.NotFound:
         joueur2_id = duel_data.get("joueur2", discord.Object(id=0)).id
         clean_up_duel(joueur1.id, joueur2_id)
+        await interaction.response.send_message("❌ Le message du duel initial n'existe plus. Le duel a été supprimé du système.", ephemeral=True)
+    except Exception as e:
+        print(f"Erreur lors de l'annulation du duel: {e}")
+        await interaction.response.send_message("❌ Une erreur s'est produite lors de l'annulation du duel.", ephemeral=True)
         
     except discord.NotFound:
         # La suppression du duel dans la mémoire et la BD se fait dans tous les cas
