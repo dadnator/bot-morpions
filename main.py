@@ -132,17 +132,18 @@ def find_duel_by_user(user_id):
 def clean_up_duel(joueur1_id, joueur2_id):
     """S'assure de bien supprimer le duel et ses références."""
     duel_key = tuple(sorted((joueur1_id, joueur2_id)))
+    
+    # Suppression en mémoire
     if duel_key in duels:
         del duels[duel_key]
     
     if joueur1_id in duel_by_player:
         del duel_by_player[joueur1_id]
-    if joueur2_id in duel_by_player:
+    if joueur2_id != 0 and joueur2_id in duel_by_player: # S'assurer que joueur2_id existe
         del duel_by_player[joueur2_id]
     
-    # SUPPRESSION DANS LA BASE DE DONNÉES
-    c.execute("DELETE FROM duels_en_attente WHERE joueur1_id = ? OR joueur2_id = ?", (joueur1_id, joueur1_id))
-    c.execute("DELETE FROM duels_en_attente WHERE joueur1_id = ? OR joueur2_id = ?", (joueur2_id, joueur2_id))
+    # Suppression dans la base de données
+    c.execute("DELETE FROM duels_en_attente WHERE joueur1_id = ? OR joueur2_id = ?", (joueur1_id, joueur2_id))
     conn.commit()
 
 # --- Vues Discord ---
