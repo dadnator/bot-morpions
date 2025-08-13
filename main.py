@@ -2,17 +2,12 @@ import os
 import discord
 from discord import app_commands
 from discord.ext import commands
+from keep_alive import keep_alive
 import random
 import asyncio
 import sqlite3
 from datetime import datetime
 
-# Assume this is handled by your environment
-try:
-    from keep_alive import keep_alive
-except ImportError:
-    def keep_alive():
-        pass 
 
 token = os.environ['TOKEN_BOT_DISCORD']
 
