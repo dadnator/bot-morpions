@@ -151,7 +151,6 @@ class TicTacToeView(discord.ui.View):
             await self.end_game(interaction, None, is_draw=True)
             return
 
-        # Passe le tour au joueur suivant
         self.joueur_actif = self.joueur2 if self.joueur_actif.id == self.joueur1.id else self.joueur1
         self.update_buttons()
         
@@ -184,7 +183,6 @@ class TicTacToeView(discord.ui.View):
         embed = create_board_embed(self.board, title, description, color)
         await interaction.response.edit_message(embed=embed, view=None)
 
-        # Enregistrement dans la base de données
         now = datetime.utcnow()
         try:
             c.execute(
@@ -195,7 +193,6 @@ class TicTacToeView(discord.ui.View):
         except Exception as e:
             print("❌ Erreur lors de l'insertion dans la base de données:", e)
 
-        # Suppression de l'entrée du duel du dictionnaire
         clean_up_duel(self.joueur1.id, self.joueur2.id)
 
 class RejoindreView(discord.ui.View):
@@ -254,12 +251,10 @@ class RejoindreView(discord.ui.View):
             allowed_mentions=discord.AllowedMentions(roles=True)
         )
         
-        # Mise à jour de l'entrée dans les dictionnaires
         duel_key = tuple(sorted((self.joueur1.id, self.joueur2.id)))
         duels[duel_key] = self.duel_data
         duel_by_player[self.joueur2.id] = (duel_key, self.duel_data)
         
-        # Correction pour l'entrée du joueur 1, qui peut avoir été ajoutée avec un placeholder
         old_duel_key = tuple(sorted((self.joueur1.id, 0)))
         if old_duel_key in duels:
             del duels[old_duel_key]
@@ -458,7 +453,7 @@ async def quit_duel(interaction: discord.Interaction):
     
     is_joueur1 = interaction.user.id == joueur1.id
     
-    if not is_duel_pending(duel_data):
+    if "game_message_id" in duel_data and duel_data["game_message_id"] is not None:
         await interaction.response.send_message("❌ La partie est déjà en cours, vous ne pouvez pas la quitter.", ephemeral=True)
         return
 
@@ -472,15 +467,13 @@ async def quit_duel(interaction: discord.Interaction):
             message_to_edit = await interaction.channel.fetch_message(message_id_to_edit)
             
             if is_joueur1:
-                # C'est le créateur du duel qui annule.
                 embed_initial = message_to_edit.embeds[0]
                 embed_initial.color = discord.Color.red()
                 embed_initial.title += " (Annulé)"
                 embed_initial.description = f"⚠️ Ce duel a été annulé par {interaction.user.mention}."
                 await message_to_edit.edit(embed=embed_initial, view=None)
                 await interaction.response.send_message("✅ Ton duel a bien été annulé.", ephemeral=True)
-            else:
-                # C'est le joueur 2 qui quitte. On réinitialise l'embed pour permettre à un nouveau joueur de rejoindre.
+            else: # C'est le joueur 2 qui quitte
                 new_embed = discord.Embed(
                     title=f"⚔️ Nouveau Duel Morpion en attente de joueur",
                     description=f"{joueur1.mention} a misé **{f'{montant:,}'.replace(',', ' ')}** kamas pour un duel.",
@@ -499,7 +492,6 @@ async def quit_duel(interaction: discord.Interaction):
                 
                 await message_to_edit.edit(content="", embed=new_embed, view=new_view)
                 await interaction.response.send_message("✅ Tu as quitté le duel. Le créateur attend maintenant un autre joueur.", ephemeral=True)
-
         else:
             await interaction.response.send_message("❌ Le message du duel n'a pas été trouvé. Le duel a été supprimé du système.", ephemeral=True)
     except discord.NotFound:
