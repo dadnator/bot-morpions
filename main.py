@@ -281,7 +281,7 @@ class RejoindreView(discord.ui.View):
 
 class StatsView(discord.ui.View):
     def __init__(self, ctx, entries, page=0):
-        super().__init__(timeout=None)
+        super().__init__(timeout=120)
         self.ctx = ctx
         self.entries = entries
         self.page = page
