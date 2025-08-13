@@ -182,7 +182,7 @@ class TicTacToeView(discord.ui.View):
         except Exception as e:
             print("❌ Erreur lors de l'insertion dans la base de données:", e)
 
-        # Ajout d'un appel à la fonction de nettoyage
+        # Suppression de l'entrée du duel du dictionnaire
         clean_up_duel(self.game_message_id)
 
 
@@ -513,7 +513,6 @@ async def mystats(interaction: discord.Interaction):
     SELECT joueur_id,
             SUM(montant) as kamas_mises,
             SUM(CASE WHEN gagnant_id = joueur_id THEN montant * 2 * 0.95 ELSE 0 END) as kamas_gagnes,
-            SUM(CASE WHEN gagnant_id = joueur_id THEN 1 ELSE 0 END) as victoires,
             SUM(CASE WHEN est_nul = 1 THEN 1 ELSE 0 END) as nuls,
             SUM(CASE WHEN gagnant_id != joueur_id AND est_nul = 0 THEN 1 ELSE 0 END) as defaites,
             COUNT(*) as total_parties
@@ -537,7 +536,8 @@ async def mystats(interaction: discord.Interaction):
         await interaction.response.send_message(embed=embed, ephemeral=True)
         return
 
-    _, kamas_mises, kamas_gagnes, victoires, nuls, defaites, total_parties = stats_data
+    _, kamas_mises, kamas_gagnes, nuls, defaites, total_parties = stats_data
+    victoires = total_parties - nuls - defaites
     winrate = (victoires / total_parties * 100) if total_parties > 0 else 0.0
 
     embed = discord.Embed(
