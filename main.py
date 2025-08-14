@@ -436,73 +436,82 @@ async def duel(interaction: discord.Interaction, montant: int):
     duel_by_player[interaction.user.id] = (duel_key, view.duel_data)
     
 
-@bot.tree.command(name="quit", description="Annule le duel en cours que tu as lancé.")
+@bot.tree.command(name="quit", description="Annule le duel en cours que tu as lancé ou que tu as rejoint.")
 async def quit_duel(interaction: discord.Interaction):
+    duel_a_annuler_id = None
+    is_joueur2 = False
+
+    # Utiliser le dictionnaire de mappage pour une recherche plus efficace
     duel_key, duel_data = find_duel_by_user(interaction.user.id)
-    
     if duel_key is None:
-        await interaction.response.send_message("❌ Tu n'as aucun duel actif à annuler.", ephemeral=True)
+        await interaction.response.send_message(
+            "❌ Tu n'as aucun duel en attente à annuler ou à quitter.", ephemeral=True)
         return
 
     joueur1 = duel_data["joueur1"]
+    joueur2 = duel_data["joueur2"]
     montant = duel_data["montant"]
-    is_joueur2 = "joueur2" in duel_data and duel_data.get("joueur2") and duel_data["joueur2"].id == interaction.user.id
-    
-    # Cas 1 : Le duel est en cours
-    if "joueur2" in duel_data and duel_data["joueur2"] is not None:
-        if duel_data.get("game_message_id"):
-            # Si un message de jeu existe, le duel est en cours. On ne peut pas le quitter via cette commande.
-            await interaction.response.send_message("❌ La partie est déjà en cours, vous ne pouvez pas la quitter. Veuillez attendre la fin du match.", ephemeral=True)
-            return
 
-    # Cas 2 : Le duel est en attente
-    message_id_to_edit = duel_data.get("message_id_initial")
+    if interaction.user.id == joueur1.id:
+        # C'est le joueur 1 qui annule le duel
+        is_joueur2 = False
+    elif joueur2 and interaction.user.id == joueur2.id:
+        # C'est le joueur 2 qui quitte le duel
+        is_joueur2 = True
+    else:
+        # Cas où le joueur a un duel en cours de jeu (non géré par le dictionnaire 'duels')
+        await interaction.response.send_message(
+            "❌ Tu es déjà en pleine partie. Tu ne peux pas la quitter comme ça !", ephemeral=True)
+        return
     
-    # Suppression du duel des deux dictionnaires
-    joueur2_id = duel_data.get("joueur2", discord.Object(id=0)).id
-    clean_up_duel(joueur1.id, joueur2_id)
-    
+    # Correction de l'erreur ici : on utilise la vue appropriée
+    # Si le joueur 2 quitte, on recrée la vue pour permettre à un nouveau joueur de rejoindre
     try:
-        if message_id_to_edit:
-            message_to_edit = await interaction.channel.fetch_message(message_id_to_edit)
-            
-            if not is_joueur2:
-                # L'annulateur est le créateur du duel
-                embed_initial = message_to_edit.embeds[0]
-                embed_initial.color = discord.Color.red()
-                embed_initial.title += " (Annulé)"
-                embed_initial.description = f"⚠️ Ce duel a été annulé par {interaction.user.mention}."
-                await message_to_edit.edit(embed=embed_initial, view=None)
-                await interaction.response.send_message("✅ Ton duel a bien été annulé.", ephemeral=True)
-            else:
-                # L'annulateur est le joueur 2
-                new_embed = discord.Embed(
-                    title=f"⚔️ Nouveau Duel Morpion en attente de joueur",
-                    description=f"{joueur1.mention} a misé **{f'{montant:,}'.replace(',', ' ')}** kamas pour un duel.",
-                    color=discord.Color.orange()
-                )
-                new_embed.add_field(name="👤 Joueur 1", value=f"{joueur1.mention}", inline=True)
-                new_embed.add_field(name="👤 Joueur 2", value="🕓 En attente...", inline=True)
-                new_embed.add_field(name="Status", value="🕓 En attente d'un second joueur.", inline=False)
-                new_embed.set_footer(text="Cliquez sur le bouton pour rejoindre le duel.")
-                
-                new_view = RejoindreView(message_id=message_id_to_edit, joueur1=joueur1, montant=montant)
-                
-                # Créer une nouvelle entrée pour le duel
-                new_duel_key = tuple(sorted((joueur1.id, 0)))
-                duels[new_duel_key] = new_view.duel_data
-                duel_by_player[joueur1.id] = (new_duel_key, new_view.duel_data)
-                
-                await message_to_edit.edit(content="", embed=new_embed, view=new_view)
-                await interaction.response.send_message("✅ Tu as quitté le duel. Le créateur attend maintenant un autre joueur.", ephemeral=True)
-        else:
-            await interaction.response.send_message("❌ Le message du duel n'a pas été trouvé. Le duel a été supprimé du système.", ephemeral=True)
+        message_initial = await interaction.channel.fetch_message(duel_data["message_id_initial"])
     except discord.NotFound:
-        await interaction.response.send_message("❌ Le message du duel initial n'existe plus. Le duel a été supprimé du système.", ephemeral=True)
-    except Exception as e:
-        print(f"Erreur lors de l'annulation du duel: {e}")
-        await interaction.response.send_message("❌ Une erreur s'est produite lors de l'annulation du duel.", ephemeral=True)
+        await interaction.response.send_message("❌ Le message du duel initial n'a pas été trouvé.", ephemeral=True)
+        clean_up_duel(joueur1.id, joueur2.id if joueur2 else 0)
+        return
 
+    if is_joueur2:
+        # Le joueur 2 quitte, le duel revient à son état initial
+        new_view = RejoindreView(message_id=duel_data["message_id_initial"], joueur1=joueur1, montant=montant)
+        
+        new_embed = discord.Embed(
+            title="⚔️ Nouveau Duel Morpion en attente de joueur",
+            description=f"{joueur1.mention} a misé **{f'{montant:,}'.replace(',', ' ')}** kamas pour un duel.",
+            color=discord.Color.orange()
+        )
+        new_embed.add_field(name="👤 Joueur 1", value=f"{joueur1.mention}", inline=True)
+        new_embed.add_field(name="👤 Joueur 2", value="🕓 En attente...", inline=True)
+        new_embed.add_field(name="Status", value="🕓 En attente d'un second joueur.", inline=False)
+        new_embed.set_footer(text="Cliquez sur le bouton pour rejoindre le duel.")
+
+        role_membre = discord.utils.get(interaction.guild.roles, name="membre")
+        contenu_ping = f"{role_membre.mention} — Un nouveau duel est prêt ! Un joueur est attendu." if role_membre else ""
+        
+        await message_initial.edit(content=contenu_ping, embed=new_embed, view=new_view, allowed_mentions=discord.AllowedMentions(roles=True))
+        await interaction.response.send_message("✅ Tu as quitté le duel. Le créateur attend maintenant un autre joueur.", ephemeral=True)
+
+        # Mise à jour des dictionnaires
+        clean_up_duel(joueur1.id, joueur2.id)
+        
+        duel_key_new = tuple(sorted((joueur1.id, 0))) # Placeholder pour le joueur 2
+        new_duel_data = {"joueur1": joueur1, "montant": montant, "joueur2": None, "croupier": None, "message_id_initial": message_initial.id}
+        duels[duel_key_new] = new_duel_data
+        duel_by_player[joueur1.id] = (duel_key_new, new_duel_data)
+
+    else:
+        # Le joueur 1 annule le duel
+        clean_up_duel(joueur1.id, joueur2.id if joueur2 else 0)
+
+        embed_initial = message_initial.embeds[0]
+        embed_initial.title = "❌ Duel annulé"
+        embed_initial.description = f"Le duel de **{joueur1.display_name}** a été annulé."
+        embed_initial.color = discord.Color.red()
+        await message_initial.edit(embed=embed_initial, view=None, content="")
+        await interaction.response.send_message("✅ Ton duel a bien été annulé.", ephemeral=True)
+        
 # Commandes de statistiques (inchangées)
 @bot.tree.command(name="statsall", description="Affiche les stats de morpion à vie.")
 async def statsall(interaction: discord.Interaction):
