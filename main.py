@@ -459,12 +459,12 @@ async def quit_duel(interaction: discord.Interaction):
         message_initial = await interaction.channel.fetch_message(duel_data["message_id_initial"])
     except discord.NotFound:
         await interaction.response.send_message("❌ Le message du duel initial n'a pas été trouvé. Le duel a été supprimé.", ephemeral=True)
+        # Nettoyer les données même si le message n'est pas trouvé
         clean_up_duel(joueur1.id, joueur2.id if joueur2 else 0)
         return
 
     if interaction.user.id == joueur1.id:
         # C'est le joueur 1 qui annule le duel
-        clean_up_duel(joueur1.id, joueur2.id if joueur2 else 0)
         
         embed_initial = message_initial.embeds[0]
         embed_initial.title = "❌ Duel annulé"
@@ -472,8 +472,14 @@ async def quit_duel(interaction: discord.Interaction):
         embed_initial.color = discord.Color.red()
         await message_initial.edit(embed=embed_initial, view=None, content="")
         await interaction.response.send_message("✅ Ton duel a bien été annulé.", ephemeral=True)
+
+        # Nettoyer les entrées des dictionnaires après avoir mis à jour le message
+        clean_up_duel(joueur1.id, joueur2.id if joueur2 else 0)
+
     elif joueur2 and interaction.user.id == joueur2.id:
         # C'est le joueur 2 qui quitte le duel
+        
+        # Nettoyer les anciennes entrées avant de recréer un nouveau duel
         clean_up_duel(joueur1.id, joueur2.id)
 
         new_view = RejoindreView(message_id=message_initial.id, joueur1=joueur1, montant=montant)
@@ -500,10 +506,9 @@ async def quit_duel(interaction: discord.Interaction):
         duels[duel_key_new] = new_duel_data
         duel_by_player[joueur1.id] = (duel_key_new, new_duel_data)
     else:
-        # Cas où le joueur n'est pas le joueur 1 ou 2, ou le duel a déjà commencé
+        # Cas où le joueur n'est pas le joueur 1 ou 2
         await interaction.response.send_message(
             "❌ Impossible d'annuler ou de quitter ce duel.", ephemeral=True)
-
 
 # Commandes de statistiques (inchangées)
 @bot.tree.command(name="statsall", description="Affiche les stats de morpion à vie.")
