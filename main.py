@@ -438,44 +438,39 @@ async def duel(interaction: discord.Interaction, montant: int):
 
 @bot.tree.command(name="quit", description="Annule le duel en cours que tu as lancé ou que tu as rejoint.")
 async def quit_duel(interaction: discord.Interaction):
-    duel_a_annuler_id = None
-    is_joueur2 = False
-
-    # Utiliser le dictionnaire de mappage pour une recherche plus efficace
     duel_key, duel_data = find_duel_by_user(interaction.user.id)
+    
     if duel_key is None:
         await interaction.response.send_message(
             "❌ Tu n'as aucun duel en attente à annuler ou à quitter.", ephemeral=True)
         return
-
+    
     joueur1 = duel_data["joueur1"]
     joueur2 = duel_data["joueur2"]
     montant = duel_data["montant"]
 
-    if interaction.user.id == joueur1.id:
-        # C'est le joueur 1 qui annule le duel
-        is_joueur2 = False
-    elif joueur2 and interaction.user.id == joueur2.id:
-        # C'est le joueur 2 qui quitte le duel
-        is_joueur2 = True
-    else:
-        # Cas où le joueur a un duel en cours de jeu (non géré par le dictionnaire 'duels')
-        await interaction.response.send_message(
-            "❌ Tu es déjà en pleine partie. Tu ne peux pas la quitter comme ça !", ephemeral=True)
-        return
-    
-    # Correction de l'erreur ici : on utilise la vue appropriée
-    # Si le joueur 2 quitte, on recrée la vue pour permettre à un nouveau joueur de rejoindre
     try:
         message_initial = await interaction.channel.fetch_message(duel_data["message_id_initial"])
     except discord.NotFound:
-        await interaction.response.send_message("❌ Le message du duel initial n'a pas été trouvé.", ephemeral=True)
+        await interaction.response.send_message("❌ Le message du duel initial n'a pas été trouvé. Le duel a été supprimé.", ephemeral=True)
         clean_up_duel(joueur1.id, joueur2.id if joueur2 else 0)
         return
 
-    if is_joueur2:
-        # Le joueur 2 quitte, le duel revient à son état initial
-        new_view = RejoindreView(message_id=duel_data["message_id_initial"], joueur1=joueur1, montant=montant)
+    if interaction.user.id == joueur1.id:
+        # C'est le joueur 1 qui annule le duel
+        clean_up_duel(joueur1.id, joueur2.id if joueur2 else 0)
+        
+        embed_initial = message_initial.embeds[0]
+        embed_initial.title = "❌ Duel annulé"
+        embed_initial.description = f"Le duel de **{joueur1.display_name}** a été annulé."
+        embed_initial.color = discord.Color.red()
+        await message_initial.edit(embed=embed_initial, view=None, content="")
+        await interaction.response.send_message("✅ Ton duel a bien été annulé.", ephemeral=True)
+    elif joueur2 and interaction.user.id == joueur2.id:
+        # C'est le joueur 2 qui quitte le duel
+        clean_up_duel(joueur1.id, joueur2.id)
+
+        new_view = RejoindreView(message_id=message_initial.id, joueur1=joueur1, montant=montant)
         
         new_embed = discord.Embed(
             title="⚔️ Nouveau Duel Morpion en attente de joueur",
@@ -493,25 +488,17 @@ async def quit_duel(interaction: discord.Interaction):
         await message_initial.edit(content=contenu_ping, embed=new_embed, view=new_view, allowed_mentions=discord.AllowedMentions(roles=True))
         await interaction.response.send_message("✅ Tu as quitté le duel. Le créateur attend maintenant un autre joueur.", ephemeral=True)
 
-        # Mise à jour des dictionnaires
-        clean_up_duel(joueur1.id, joueur2.id)
-        
-        duel_key_new = tuple(sorted((joueur1.id, 0))) # Placeholder pour le joueur 2
+        # Créer une nouvelle entrée dans les dictionnaires pour le duel en attente
+        duel_key_new = tuple(sorted((joueur1.id, 0)))
         new_duel_data = {"joueur1": joueur1, "montant": montant, "joueur2": None, "croupier": None, "message_id_initial": message_initial.id}
         duels[duel_key_new] = new_duel_data
         duel_by_player[joueur1.id] = (duel_key_new, new_duel_data)
-
     else:
-        # Le joueur 1 annule le duel
-        clean_up_duel(joueur1.id, joueur2.id if joueur2 else 0)
+        # Cas où le joueur n'est pas le joueur 1 ou 2, ou le duel a déjà commencé
+        await interaction.response.send_message(
+            "❌ Impossible d'annuler ou de quitter ce duel.", ephemeral=True)
 
-        embed_initial = message_initial.embeds[0]
-        embed_initial.title = "❌ Duel annulé"
-        embed_initial.description = f"Le duel de **{joueur1.display_name}** a été annulé."
-        embed_initial.color = discord.Color.red()
-        await message_initial.edit(embed=embed_initial, view=None, content="")
-        await interaction.response.send_message("✅ Ton duel a bien été annulé.", ephemeral=True)
-        
+
 # Commandes de statistiques (inchangées)
 @bot.tree.command(name="statsall", description="Affiche les stats de morpion à vie.")
 async def statsall(interaction: discord.Interaction):
@@ -521,12 +508,12 @@ async def statsall(interaction: discord.Interaction):
 
     c.execute("""
     SELECT joueur_id,
-            SUM(montant) as kamas_mises,
-            SUM(CASE WHEN gagnant_id = joueur_id THEN montant * 2 * 0.95 ELSE 0 END) as kamas_gagnes,
-            SUM(CASE WHEN gagnant_id = joueur_id THEN 1 ELSE 0 END) as victoires,
-            SUM(CASE WHEN est_nul = 1 THEN 1 ELSE 0 END) as nuls,
-            SUM(CASE WHEN gagnant_id != joueur_id AND est_nul = 0 THEN 1 ELSE 0 END) as defaites,
-            COUNT(*) as total_parties
+           SUM(montant) as kamas_mises,
+           SUM(CASE WHEN gagnant_id = joueur_id THEN montant * 2 * 0.95 ELSE 0 END) as kamas_gagnes,
+           SUM(CASE WHEN gagnant_id = joueur_id THEN 1 ELSE 0 END) as victoires,
+           SUM(CASE WHEN est_nul = 1 THEN 1 ELSE 0 END) as nuls,
+           SUM(CASE WHEN gagnant_id != joueur_id AND est_nul = 0 THEN 1 ELSE 0 END) as defaites,
+           COUNT(*) as total_parties
     FROM (
         SELECT joueur1_id as joueur_id, montant, gagnant_id, est_nul FROM parties
         UNION ALL
@@ -554,11 +541,11 @@ async def mystats(interaction: discord.Interaction):
 
     c.execute("""
     SELECT joueur_id,
-            SUM(montant) as kamas_mises,
-            SUM(CASE WHEN gagnant_id = joueur_id THEN montant * 2 * 0.95 ELSE 0 END) as kamas_gagnes,
-            SUM(CASE WHEN est_nul = 1 THEN 1 ELSE 0 END) as nuls,
-            SUM(CASE WHEN gagnant_id != joueur_id AND est_nul = 0 THEN 1 ELSE 0 END) as defaites,
-            COUNT(*) as total_parties
+           SUM(montant) as kamas_mises,
+           SUM(CASE WHEN gagnant_id = joueur_id THEN montant * 2 * 0.95 ELSE 0 END) as kamas_gagnes,
+           SUM(CASE WHEN est_nul = 1 THEN 1 ELSE 0 END) as nuls,
+           SUM(CASE WHEN gagnant_id != joueur_id AND est_nul = 0 THEN 1 ELSE 0 END) as defaites,
+           COUNT(*) as total_parties
     FROM (
         SELECT joueur1_id as joueur_id, montant, gagnant_id, est_nul FROM parties
         UNION ALL
