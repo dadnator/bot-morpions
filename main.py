@@ -420,18 +420,24 @@ async def duel(interaction: discord.Interaction, montant: int):
     embed.add_field(name="Status", value="🕓 En attente d'un second joueur.", inline=False)
     embed.set_footer(text="Cliquez sur le bouton pour rejoindre le duel.")
 
+    # La vue est créée, mais sans l'ID de message pour l'instant
     view = RejoindreView(message_id=None, joueur1=interaction.user, montant=montant)
     
     role_membre = discord.utils.get(interaction.guild.roles, name="membre")
     contenu_ping = f"{role_membre.mention} — Un nouveau duel est prêt ! Un joueur est attendu." if role_membre else ""
     
+    # On envoie le message et on attend la réponse pour récupérer son ID
     await interaction.response.send_message(content=contenu_ping, embed=embed, view=view, allowed_mentions=discord.AllowedMentions(roles=True))
     
     message = await interaction.original_response()
+    
+    # On met à jour l'ID du message dans l'instance de la vue
     view.message_id_initial = message.id
     
-    # Mettre le duel dans le dictionnaire avec le joueur 1 en attendant le joueur 2
+    # Enfin, on met à jour l'ID du message dans le dictionnaire du duel
     duel_key = tuple(sorted((interaction.user.id, 0))) # Utiliser 0 comme placeholder pour joueur2_id
+    view.duel_data["message_id_initial"] = message.id # Met à jour la valeur dans le dictionnaire
+    
     duels[duel_key] = view.duel_data
     duel_by_player[interaction.user.id] = (duel_key, view.duel_data)
     
