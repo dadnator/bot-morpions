@@ -10,6 +10,10 @@ from keep_alive import keep_alive # Assume this is handled by your environment
 
 token = os.environ['TOKEN_BOT_DISCORD']
 
+ID_CROUPIER = 1406210029815861258
+ID_MEMBRE = 1406210131515019355
+ID_SALON_MORPION = 1404446607533146182
+
 # Dictionnaire pour stocker les duels en cours.
 # La clé sera un tuple de (joueur1_id, joueur2_id) pour une identification unique.
 duels = {}
@@ -237,7 +241,7 @@ class RejoindreView(discord.ui.View):
         embed.set_field_at(2, name="Status", value="🕓 Un croupier est attendu pour lancer le duel.", inline=False)
         embed.set_footer(text="Cliquez sur le bouton pour rejoindre en tant que croupier.")
         
-        role_croupier = discord.utils.get(interaction.guild.roles, name="croupier")
+        role_croupier = interaction.guild.get_role(ID_CROUPIER)
         contenu_ping = f"{role_croupier.mention} — Un nouveau duel est prêt ! Un croupier est attendu." if role_croupier else ""
         
         await interaction.response.edit_message(
@@ -260,7 +264,7 @@ class RejoindreView(discord.ui.View):
         duel_by_player[self.joueur1.id] = (duel_key, self.duel_data)
 
     async def rejoindre_croupier(self, interaction: discord.Interaction):
-        role_croupier = discord.utils.get(interaction.guild.roles, name="croupier")
+        role_croupier = interaction.guild.get_role(ID_CROUPIER)
         if not role_croupier or role_croupier not in interaction.user.roles:
             await interaction.response.send_message("❌ Tu n'as pas le rôle de `croupier` pour rejoindre ce duel.", ephemeral=True)
             return
@@ -394,8 +398,8 @@ class StatsView(discord.ui.View):
 @bot.tree.command(name="duel", description="Lancer un duel de morpion avec un montant.")
 @app_commands.describe(montant="Montant misé en kamas")
 async def duel(interaction: discord.Interaction, montant: int):
-    if not isinstance(interaction.channel, discord.TextChannel) or interaction.channel.name != "morpion":
-        await interaction.response.send_message("❌ Cette commande ne peut être utilisée que dans le salon #morpion.", ephemeral=True)
+    if interaction.channel.id != ID_SALON_MORPION:
+        await interaction.response.send_message("❌ Cette commande ne peut être utilisée que dans le salon #『❌•⭕』tic•tac•toe.", ephemeral=True)
         return
     
     if montant <= 0:
@@ -423,7 +427,7 @@ async def duel(interaction: discord.Interaction, montant: int):
     # La vue est créée, mais sans l'ID de message pour l'instant
     view = RejoindreView(message_id=None, joueur1=interaction.user, montant=montant)
     
-    role_membre = discord.utils.get(interaction.guild.roles, name="membre")
+    role_membre = interaction.guild.get_role(ID_MEMBRE)
     contenu_ping = f"{role_membre.mention} — Un nouveau duel est prêt ! Un joueur est attendu." if role_membre else ""
     
     # On envoie le message et on attend la réponse pour récupérer son ID
@@ -494,7 +498,7 @@ async def quit_duel(interaction: discord.Interaction):
         new_embed.add_field(name="Status", value="🕓 En attente d'un second joueur.", inline=False)
         new_embed.set_footer(text="Cliquez sur le bouton pour rejoindre le duel.")
 
-        role_membre = discord.utils.get(interaction.guild.roles, name="membre")
+        role_membre = interaction.guild.get_role(ID_MEMBRE)
         contenu_ping = f"{role_membre.mention} — Un nouveau duel est prêt ! Un joueur est attendu." if role_membre else ""
         
         await message_initial.edit(content=contenu_ping, embed=new_embed, view=new_view, allowed_mentions=discord.AllowedMentions(roles=True))
@@ -513,8 +517,8 @@ async def quit_duel(interaction: discord.Interaction):
 # Commandes de statistiques (inchangées)
 @bot.tree.command(name="statsall", description="Affiche les stats de morpion à vie.")
 async def statsall(interaction: discord.Interaction):
-    if not isinstance(interaction.channel, discord.TextChannel) or interaction.channel.name != "morpion":
-        await interaction.response.send_message("❌ Cette commande ne peut être utilisée que dans le salon #morpion.", ephemeral=True)
+    if interaction.channel.id != ID_SALON_MORPION:
+        await interaction.response.send_message("❌ Cette commande ne peut être utilisée que dans le salon #『❌•⭕』tic•tac•toe.", ephemeral=True)
         return
 
     c.execute("""
